@@ -1,0 +1,12 @@
+.git
+.gitignore
+.github
+*.md
+!README.md
+Makefile
+bin/
+examples/
+templates/
+tests/
+*.log
+*.tmp

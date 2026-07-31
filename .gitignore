@@ -1,0 +1,29 @@
+# Build artifacts
+*.tar
+*.tar.gz
+*.tgz
+
+# Docker
+.docker/
+docker-compose.override.yml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+Caddyfile.test
+Caddyfile.example
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.bak

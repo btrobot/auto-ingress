@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Auto Ingress Configuration Generator
+# Generates Caddyfile from domain configuration
+
+DOMAINS_FILE="${1:?Usage: generate-config <domains.yml>}"
+OUTPUT_FILE="${2:-Caddyfile}"
+
+# Parse domains configuration
+generate_dns_config() {
+    local provider="${DNS_PROVIDER:-tencentcloud}"
+    case "$provider" in
+        tencentcloud)
+            printf '\tacme_dns tencentcloud {\n\t\tsecret_id {env.TENCENTCLOUD_SECRET_ID}\n\t\tsecret_key {env.TENCENTCLOUD_SECRET_KEY}\n\t}\n'
+            ;;
+        aliyun)
+            printf '\tacme_dns aliyun {\n\t\taccess_key_id {env.ALIYUN_ACCESS_KEY_ID}\n\t\taccess_key_secret {env.ALIYUN_ACCESS_KEY_SECRET}\n\t}\n'
+            ;;
+        cloudflare)
+            printf '\tacme_dns cloudflare {\n\t\tapi_token {env.CLOUDFLARE_API_TOKEN}\n\t}\n'
+            ;;
+        aws)
+            printf '\tacme_dns route53 {\n\t\taccess_key_id {env.AWS_ACCESS_KEY_ID}\n\t\tsecret_access_key {env.AWS_SECRET_ACCESS_KEY}\n\t\tregion {env.AWS_REGION}\n\t}\n'
+            ;;
+        *)
+            echo "Unsupported DNS provider: $provider" >&2
+            exit 1
+            ;;
+    esac
+}
+
+generate_security_headers() {
+    printf '(security_headers) {\n\theader {\n\t\tStrict-Transport-Security "max-age=31536000; includeSubDomains"\n\t\tX-Content-Type-Options "nosniff"\n\t\tX-Frame-Options "SAMEORIGIN"\n\t\tReferrer-Policy "strict-origin-when-cross-origin"\n\t\t-Server\n\t}\n}\n'
+}
+
+generate_site_config() {
+    local domain="$1"
+    local upstream="$2"
+    local extra_headers="${3:-}"
+    
+    printf '%s {\n\tencode zstd gzip\n\timport security_headers\n\t%s\n\t\n\treverse_proxy %s {\n\t\thealth_uri /health\n\t\thealth_interval 30s\n\t\thealth_timeout 5s\n\t}\n\t\n\tlog {\n\t\toutput stdout\n\t\tformat json\n\t}\n}\n' "$domain" "$extra_headers" "$upstream"
+}
+
+# Main generation
+{
+    printf '{\n\temail {$ACME_EMAIL}\n\tadmin off\n'
+    generate_dns_config
+    printf '}\n\n'
+    generate_security_headers
+    printf '\n'
+    
+    # Generate site configs from environment variable
+    # Format: domain1:upstream1,domain2:upstream2
+    IFS=',' read -ra SITES <<< "$SITE_DOMAINS"
+    for site in "${SITES[@]}"; do
+        IFS=':' read -r domain upstream <<< "$site"
+        generate_site_config "$domain" "$upstream"
+    done
+} > "$OUTPUT_FILE"
+
+# Replace ACME_EMAIL placeholder
+sed -i "s/$ACME_EMAIL/{$ACME_EMAIL}/g" "$OUTPUT_FILE"
+
+echo "Generated $OUTPUT_FILE"

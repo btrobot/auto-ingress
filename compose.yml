@@ -1,0 +1,92 @@
+# Auto Ingress - Generic Docker Compose Configuration
+# Supports multiple domains and services with auto HTTPS
+
+name: ${COMPOSE_PROJECT_NAME:?COMPOSE_PROJECT_NAME is required}
+
+services:
+  gateway:
+    image: ${GATEWAY_IMAGE:?GATEWAY_IMAGE must be repository@sha256 digest}
+    container_name: ${COMPOSE_PROJECT_NAME}-gateway
+    restart: unless-stopped
+    
+    # Environment configuration
+    env_file:
+      - ${GATEWAY_ENV_FILE:?GATEWAY_ENV_FILE is required}
+    environment:
+      # Required
+      ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL is required}
+      SITE_DOMAINS: ${SITE_DOMAINS:?SITE_DOMAINS is required}
+      
+      # Optional with defaults
+      DNS_PROVIDER: ${DNS_PROVIDER:-tencentcloud}
+      HEALTH_DOMAIN: ${HEALTH_DOMAIN:-}
+      
+    # DNS provider credentials (optional, from env file)
+    # TENCENTCLOUD_SECRET_ID: ${TENCENTCLOUD_SECRET_ID:-}
+    # TENCENTCLOUD_SECRET_KEY: ${TENCENTCLOUD_SECRET_KEY:-}
+    
+    # Port bindings
+    ports:
+      - "${HTTP_BIND:-0.0.0.0:80}:80/tcp"
+      - "${HTTPS_BIND:-0.0.0.0:443}:443/tcp"
+      - "${HTTPS_BIND:-0.0.0.0:443}:443/udp"
+      - "${ADMIN_BIND:-127.0.0.1:2019}:2019/tcp"  # Admin API (localhost only)
+    
+    # Volumes
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+      - ${CADDYFILE:-./Caddyfile}:/etc/caddy/Caddyfile:ro
+    
+    # Temporary filesystem
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,uid=1000,gid=1000,mode=0700
+    
+    # Network
+    networks:
+      - upstream
+    
+    # Health check
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          curl -f http://localhost:2019/health || exit 1
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    
+    # Security
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    
+    # Resource limits
+    mem_limit: ${MEM_LIMIT:-256m}
+    pids_limit: ${PIDS_LIMIT:-256}
+    stop_grace_period: 30s
+    
+    # Logging
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+# External network for upstream services
+networks:
+  upstream:
+    external: true
+    name: ${UPSTREAM_NETWORK:?UPSTREAM_NETWORK is required}
+
+# Persistent volumes
+volumes:
+  caddy_data:
+    driver: local
+  caddy_config:
+    driver: local
