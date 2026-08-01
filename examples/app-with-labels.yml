@@ -1,0 +1,50 @@
+# 示例: 使用 Docker 标签的应用服务
+# auto-ingress 会自动发现并配置这些服务
+
+name: my-app
+
+services:
+  # Web 应用
+  web:
+    image: my-web-app:latest
+    container_name: my-web-app
+    labels:
+      # 启用 auto-ingress
+      - "auto-ingress.enable=true"
+      # 域名 (可以多个)
+      - "auto-ingress.domain=example.com"
+      - "auto-ingress.domain=www.example.com"
+      # 端口
+      - "auto-ingress.port=3000"
+    networks:
+      - app-network
+  
+  # API 服务
+  api:
+    image: my-api-server:latest
+    container_name: my-api-server
+    labels:
+      # 启用 auto-ingress
+      - "auto-ingress.enable=true"
+      # 域名
+      - "auto-ingress.domain=api.example.com"
+      # 端口
+      - "auto-ingress.port=8080"
+    networks:
+      - app-network
+  
+  # 数据库 (不暴露)
+  database:
+    image: postgres:15
+    container_name: my-database
+    labels:
+      # 禁用 auto-ingress
+      - "auto-ingress.enable=false"
+    networks:
+      - app-network
+
+# 共享网络
+networks:
+  app-network:
+    external: true
+    name: app-network

@@ -2,15 +2,14 @@
 set -e
 
 # Auto Ingress Entrypoint
-# Handles runtime configuration and validation
+# 支持两种模式: 环境变量配置 或 Docker标签自动发现
 
-# ── Configuration Validation ────────────────────────────────────────
+# ── 配置验证 ──────────────────────────────────────────────────
 validate_config() {
     echo "Validating configuration..."
     
-    # Check required environment variables
-    required_vars="ACME_EMAIL SITE_DOMAINS"
-    for var in $required_vars; do
+    # 检查必需的环境变量
+    for var in ACME_EMAIL; do
         eval value=\$$var
         if [ -z "$value" ]; then
             echo "ERROR: Required environment variable $var is not set"
@@ -18,16 +17,7 @@ validate_config() {
         fi
     done
     
-    # Validate SITE_DOMAINS format
-    echo "$SITE_DOMAINS" | tr ',' '\n' | while IFS=':' read -r domain service port; do
-        if [ -z "$domain" ] || [ -z "$service" ] || [ -z "$port" ]; then
-            echo "ERROR: Invalid SITE_DOMAINS format: $domain:$service:$port"
-            echo "Expected: domain:service:port,domain2:service2:port2"
-            exit 1
-        fi
-    done
-    
-    # Check DNS provider configuration
+    # 检查 DNS提供商配置
     if [ -n "$DNS_PROVIDER" ]; then
         case "$DNS_PROVIDER" in
             tencentcloud)
@@ -60,14 +50,58 @@ validate_config() {
     echo "Configuration validated successfully"
 }
 
-# ── Generate Caddyfile ──────────────────────────────────────────────
+# ── Docker 标签发现 ──────────────────────────────────────────
+discover_from_docker() {
+    echo "Discovering services from Docker..."
+    
+    # 发现带 auto-ingress.enable=true 标签的容器
+    SERVICES=""
+    
+    # 使用 docker ps 获取所有带标签的容器
+    docker ps --format '{{.ID}}' | while read -r container_id; do
+        # 检查容器是否有 auto-ingress.enable 标签
+        ENABLED=$(docker inspect "$container_id" --format '{{index .Config.Labels "auto-ingress.enable"}}' 2>/dev/null || echo "")
+        
+        if [ "$ENABLED" = "true" ]; then
+            # 获取域名
+            DOMAINS=$(docker inspect "$container_id" --format '{{index .Config.Labels "auto-ingress.domain"}}' 2>/dev/null || echo "")
+            # 获取端口
+            PORT=$(docker inspect "$container_id" --format '{{index .Config.Labels "auto-ingress.port"}}' 2>/dev/null || echo "80")
+            # 获取服务名
+            SERVICE_NAME=$(docker inspect "$container_id" --format '{{.Name}}' 2>/dev/null | sed 's/^\///')
+            
+            if [ -n "$DOMAINS" ]; then
+                # 将域名转换为逗号分隔
+                DOMAIN_LIST=$(echo "$DOMAINS" | tr ' ' ',')
+                echo "Found service: $SERVICE_NAME -> $DOMAIN_LIST:$PORT"
+                
+                # 添加到服务列表
+                if [ -n "$SERVICES" ]; then
+                    SERVICES="$SERVICES,$DOMAIN_LIST:$SERVICE_NAME:$PORT"
+                else
+                    SERVICES="$DOMAIN_LIST:$SERVICE_NAME:$PORT"
+                fi
+            fi
+        fi
+    done
+    
+    # 如果没有发现服务，使用环境变量
+    if [ -z "$SERVICES" ] && [ -n "$SITE_DOMAINS" ]; then
+        echo "No services discovered from Docker, using SITE_DOMAINS"
+        SERVICES="$SITE_DOMAINS"
+    fi
+    
+    echo "Discovered services: $SERVICES"
+}
+
+# ── 生成 Caddyfile ──────────────────────────────────────────
 generate_caddyfile() {
     echo "Generating Caddyfile..."
     
-    # Default DNS provider
+    # 默认 DNS 提供商
     DNS_PROVIDER=${DNS_PROVIDER:-tencentcloud}
     
-    # Generate DNS configuration
+    # 生成 DNS 配置
     dns_config=""
     case "$DNS_PROVIDER" in
         tencentcloud)
@@ -96,11 +130,17 @@ generate_caddyfile() {
             ;;
     esac
     
-    # Generate site configurations
+    # 使用发现的服务或环境变量
+    SERVICES_TO_USE="${SERVICES:-$SITE_DOMAINS}"
+    
+    # 生成站点配置
     site_configs=""
-    IFS=',' read -ra sites <<< "$SITE_DOMAINS"
-    for site in "${sites[@]}"; do
-        IFS=':' read -r domain service port <<< "$site"
+    OLD_IFS="$IFS"
+    IFS=','
+    for site in $SERVICES_TO_USE; do
+        IFS=':' read -r domain service port << SPLIT
+$site
+SPLIT
         site_configs="$site_configs
 $domain {
 	encode zstd gzip
@@ -117,12 +157,13 @@ $domain {
 	}
 }"
     done
+    IFS="$OLD_IFS"
     
-    # Generate complete Caddyfile
+    # 生成完整的 Caddyfile
     cat > /etc/caddy/Caddyfile << CADDYFILE
 {
-	email {$ACME_EMAIL}
-	admin off
+	email $ACME_EMAIL
+	admin localhost:2019
 	$dns_config
 }
 
@@ -132,27 +173,29 @@ CADDYFILE
     echo "Caddyfile generated at /etc/caddy/Caddyfile"
 }
 
-# ── Main ────────────────────────────────────────────────────────────
+# ── 主流程 ──────────────────────────────────────────────────
 main() {
     echo "=== Auto Ingress Gateway ==="
     echo "Version: ${VERSION:-dev}"
+    echo "Mode: ${AUTO_DISCOVER:-env}"
     echo ""
     
-    # Validate configuration
+    # 验证配置
     validate_config
     
-    # Generate Caddyfile if not exists
-    if [ ! -f /etc/caddy/Caddyfile ]; then
-        generate_caddyfile
-    else
-        echo "Using existing Caddyfile"
+    # 如果启用自动发现，则从 Docker 标签发现服务
+    if [ "${AUTO_DISCOVER:-false}" = "true" ]; then
+        discover_from_docker
     fi
     
-    # Execute command
+    # 生成 Caddyfile
+    generate_caddyfile
+    
+    # 执行命令
     echo ""
     echo "Starting gateway..."
     exec "$@"
 }
 
-# Run main function
+# 运行主函数
 main "$@"
