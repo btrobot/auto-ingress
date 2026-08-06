@@ -4,8 +4,16 @@
 ARG CADDY_VERSION=2.10.2
 ARG ALPINE_VERSION=3.20
 
+# ── Forge base image args ──────────────────────────────────────────
+ARG CADDY_BUILDER_IMAGE=caddy:${CADDY_VERSION}-builder-alpine
+ARG CADDY_IMAGE=caddy:${CADDY_VERSION}-alpine
+ARG ALPINE_IMAGE=alpine:${ALPINE_VERSION}
+
+# ── Forge mirror args ──────────────────────────────────────────────
+ARG APK_MIRROR_HOST=
+
 # ── Builder Stage ──────────────────────────────────────────────────
-FROM caddy:${CADDY_VERSION}-builder-alpine AS builder
+FROM ${CADDY_BUILDER_IMAGE} AS builder
 
 ARG CADDY_VERSION
 ARG DNS_PLUGINS="tencentcloud"
@@ -62,7 +70,7 @@ eval $XCADDY_CMD
 BUILD_SCRIPT
 
 # ── Runtime Stage ──────────────────────────────────────────────────
-FROM caddy:${CADDY_VERSION}-alpine AS runtime
+FROM ${CADDY_IMAGE} AS runtime
 
 ARG VERSION=1.0.0
 ARG BUILD_DATE
@@ -79,7 +87,12 @@ LABEL org.opencontainers.image.title="Auto Ingress" \
       org.opencontainers.image.vendor="NodeCoda"
 
 # Install utilities for health checks
-RUN apk add --no-cache curl jq
+ARG APK_MIRROR_HOST
+RUN if [ -n "${APK_MIRROR_HOST}" ]; then \
+      echo "https://${APK_MIRROR_HOST}/alpine/v$(cat /etc/alpine-release | cut -d. -f1,2)/main" > /etc/apk/repositories && \
+      echo "https://${APK_MIRROR_HOST}/alpine/v$(cat /etc/alpine-release | cut -d. -f1,2)/community" >> /etc/apk/repositories; \
+    fi && \
+    apk add --no-cache curl jq
 
 # Copy custom Caddy binary
 COPY --from=builder /usr/bin/caddy /usr/bin/caddy

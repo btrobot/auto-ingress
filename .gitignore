@@ -27,3 +27,4 @@ Caddyfile.example
 # Temporary files
 *.tmp
 *.bak
+.artifacts/

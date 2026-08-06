@@ -1,0 +1,13 @@
+schema: build/v1
+project: auto-ingress
+platform: linux/amd64
+
+base_images:
+  - caddy_builder
+  - caddy
+  - alpine
+
+images:
+  - name: auto-ingress
+    dockerfile: Dockerfile
+    base_image_args: [CADDY_BUILDER_IMAGE, CADDY_IMAGE, ALPINE_IMAGE]
