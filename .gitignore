@@ -25,6 +25,7 @@ dist/
 # Temp
 /tmp/
 Caddyfile
-Caddyfile.*
+Caddyfile.example
+Caddyfile.test
 *.crt
 *.key

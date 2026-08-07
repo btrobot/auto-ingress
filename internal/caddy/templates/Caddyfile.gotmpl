@@ -1,0 +1,82 @@
+{
+	email {{ .Gateway.Email }}
+	admin {{ .Gateway.AdminBind }}
+{{- if eq .DNS.Provider "tencentcloud" }}
+	acme_dns tencentcloud {
+		secret_id {env.TENCENTCLOUD_SECRET_ID}
+		secret_key {env.TENCENTCLOUD_SECRET_KEY}
+	}
+{{- else if eq .DNS.Provider "aliyun" }}
+	acme_dns alidns {
+		access_key_id {env.ALIYUN_ACCESS_KEY_ID}
+		access_key_secret {env.ALIYUN_ACCESS_KEY_SECRET}
+	}
+{{- else if eq .DNS.Provider "cloudflare" }}
+	acme_dns cloudflare {
+		api_token {env.CLOUDFLARE_API_TOKEN}
+	}
+{{- else if eq .DNS.Provider "route53" }}
+	acme_dns route53 {
+		access_key_id {env.AWS_ACCESS_KEY_ID}
+		secret_access_key {env.AWS_SECRET_ACCESS_KEY}
+		region {env.AWS_REGION}
+	}
+{{- else if eq .DNS.Provider "digitalocean" }}
+	acme_dns digitalocean {
+		api_token {env.DO_AUTH_TOKEN}
+	}
+{{- else if eq .DNS.Provider "googlecloud" }}
+	acme_dns googlecloud {
+		service_account {env.GCE_SERVICE_ACCOUNT}
+	}
+{{- end }}
+}
+
+(security_headers) {
+	header {
+{{- if .Security.HSTS }}
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+{{- end }}
+{{- if .Security.ContentTypeNosniff }}
+		X-Content-Type-Options "nosniff"
+{{- end }}
+{{- if .Security.XFrameOptions }}
+		X-Frame-Options "{{ .Security.XFrameOptions }}"
+{{- end }}
+{{- if .Security.ReferrerPolicy }}
+		Referrer-Policy "{{ .Security.ReferrerPolicy }}"
+{{- end }}
+{{- if .Security.HideServerHeader }}
+		-Server
+{{- end }}
+	}
+}
+{{- range .Sites }}
+
+{{ .Domain }} {
+	encode zstd gzip
+	import security_headers
+{{- range $key, $value := .Headers }}
+	header {{ $key }} "{{ $value }}"
+{{- end }}
+
+	reverse_proxy {{ .Upstream }} {
+{{- if .Health }}
+		health_uri {{ .Health.URI }}
+		health_interval {{ .Health.Interval }}
+		health_timeout {{ .Health.Timeout }}
+{{- else }}
+		health_uri /health
+		health_interval 30s
+		health_timeout 5s
+{{- end }}
+	}
+{{- if $.Logging.AccessLog.Enabled }}
+
+	log {
+		output {{ $.Logging.AccessLog.Output }}
+		format {{ $.Logging.AccessLog.Format }}
+	}
+{{- end }}
+}
+{{- end }}
