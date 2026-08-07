@@ -1,0 +1,16 @@
+FROM caddy:2.10.2-alpine
+
+COPY auto-ingress /usr/local/bin/auto-ingress
+
+RUN addgroup -g 1000 -S caddy && \
+    adduser -u 1000 -S -s /bin/sh -G caddy caddy && \
+    mkdir -p /data /config /etc/caddy && \
+    chown -R caddy:caddy /data /config /etc/caddy && \
+    setcap cap_net_bind_service=+ep /usr/bin/caddy
+
+USER caddy
+EXPOSE 80 443 443/udp 2019
+VOLUME ["/data", "/config"]
+
+ENTRYPOINT ["auto-ingress"]
+CMD ["up", "--foreground"]

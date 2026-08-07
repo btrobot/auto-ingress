@@ -1,78 +1,36 @@
-.PHONY: build test clean help push build-all
+.PHONY: build test clean lint install run help
 
-# Variables
-IMAGE_NAME ?= auto-ingress
-IMAGE_TAG ?= dev
-DNS_PLUGINS ?= tencentcloud
-REGISTRY ?= ccr.ccs.tencentyun.com/nodecoda
+BINARY := auto-ingress
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+LDFLAGS := -ldflags "-X github.com/nodecoda/auto-ingress/cmd.version=$(VERSION)"
 
-# Colors
-GREEN = \033[0;32m
-YELLOW = \033[0;33m
-RED = \033[0;31m
-NC = \033[0m
-
-help: ## Show this help
-	@echo "$(GREEN)Auto Ingress - Build Commands$(NC)"
+help: ## Show help
+	@echo "Auto Ingress - Build Commands"
 	@echo ""
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(YELLOW)%-20s$(NC) %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
-build: ## Build the Docker image
-	@echo "$(GREEN)Building with DNS plugins: $(DNS_PLUGINS)$(NC)"
-	docker build \
-		--build-arg DNS_PLUGINS="$(DNS_PLUGINS)" \
-		--build-arg VERSION=$(IMAGE_TAG) \
-		--build-arg BUILD_DATE=$(shell date -u +"%Y-%m-%dT%H:%M:%SZ") \
-		--build-arg VCS_REVISION=$(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown") \
-		-t $(IMAGE_NAME):$(IMAGE_TAG) \
-		.
+build: ## Build binary
+	go build $(LDFLAGS) -o $(BINARY) .
 
-build-tencentcloud: ## Build with Tencent Cloud DNS
-	$(MAKE) build DNS_PLUGINS=tencentcloud
+install: ## Install to $GOPATH/bin
+	go install $(LDFLAGS) .
 
-build-aliyun: ## Build with Alibaba Cloud DNS
-	$(MAKE) build DNS_PLUGINS=aliyun
+test: ## Run tests
+	go test ./... -v
 
-build-cloudflare: ## Build with Cloudflare DNS
-	$(MAKE) build DNS_PLUGINS=cloudflare
+lint: ## Run linter
+	go vet ./...
+	@which golangci-lint > /dev/null 2>&1 && golangci-lint run || echo "Install golangci-lint for full lint"
 
-build-route53: ## Build with AWS Route53 DNS
-	$(MAKE) build DNS_PLUGINS=route53
+clean: ## Clean build artifacts
+	go clean
+	rm -f $(BINARY)
 
-build-multi: ## Build with multiple DNS plugins
-	$(MAKE) build DNS_PLUGINS="tencentcloud cloudflare route53"
+run: build ## Build and run
+	./$(BINARY)
 
-build-all: ## Build all plugin variants
-	$(MAKE) build-tencentcloud IMAGE_TAG=$(IMAGE_TAG)-tencentcloud
-	$(MAKE) build-aliyun IMAGE_TAG=$(IMAGE_TAG)-aliyun
-	$(MAKE) build-cloudflare IMAGE_TAG=$(IMAGE_TAG)-cloudflare
-	$(MAKE) build-route53 IMAGE_TAG=$(IMAGE_TAG)-route53
+release-snapshot: ## Create a release snapshot
+	goreleaser release --snapshot --clean
 
-test: ## Run configuration tests
-	@echo "$(GREEN)Testing configurations...$(NC)"
-	./bin/test-config examples/generic.env
-	./bin/test-config examples/nodecoda.env
-	./bin/test-config examples/multi-site.env
-	@echo "$(GREEN)All tests passed!$(NC)"
-
-generate: ## Generate Caddyfile from example config
-	./bin/generate-config examples/generic.env Caddyfile.example
-	@echo "$(GREEN)Generated Caddyfile.example$(NC)"
-
-push: ## Push image to registry
-	docker tag $(IMAGE_NAME):$(IMAGE_TAG) $(REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG)
-	docker push $(REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG)
-
-clean: ## Clean generated files
-	rm -f Caddyfile.example Caddyfile.test
-	rm -rf .docker/
-
-lint: ## Lint Dockerfile
-	hadolint Dockerfile || echo "$(YELLOW)Install hadolint for Dockerfile linting$(NC)"
-
-scan: ## Scan image for vulnerabilities
-	trivy image $(IMAGE_NAME):$(IMAGE_TAG) || echo "$(YELLOW)Install trivy for vulnerability scanning$(NC)"
-
-all: build test generate ## Build, test, and generate
-
-.DEFAULT_GOAL := help
+release: ## Create a release
+	goreleaser release --clean

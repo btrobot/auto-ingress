@@ -1,277 +1,196 @@
 # Auto Ingress
 
-**Domain + Service + Auto HTTPS Gateway**
+**Automatic HTTPS reverse proxy gateway — one command, HTTPS ready.**
 
-自动为域名申请 Let's Encrypt 证书，配置反向代理到后端服务。
+A CLI tool that manages a Caddy-based reverse proxy with automatic Let's Encrypt certificate provisioning via DNS-01 challenges.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-## 功能特性
-
-- ✅ **域名配置** - 支持多域名
-- ✅ **服务映射** - domain → service:port
-- ✅ **证书自动申请** - ACME DNS-01
-- ✅ **证书自动续期** - 到期前 30 天
-- ✅ **多 DNS 提供商** - 腾讯云/阿里云/Cloudflare/AWS
-- ✅ **安全头配置** - HSTS, X-Frame-Options 等
-- ✅ **健康检查** - 自动检测后端服务
-- ✅ **热重载** - 配置变更无需重启
-- ✅ **安全运行** - 非 root 用户、只读文件系统
-
-## 快速开始
-
-### 1. 克隆项目
+## Install
 
 ```bash
-git clone https://github.com/your-org/auto-ingress.git
-cd auto-ingress
+# macOS / Linux (Homebrew)
+brew install nodecoda/taps/auto-ingress
+
+# Binary download
+curl -fsSL https://github.com/nodecoda/auto-ingress/releases/latest/download/auto-ingress_linux_amd64.tar.gz | tar xz
+sudo mv auto-ingress /usr/local/bin/
+
+# From source
+go install github.com/nodecoda/auto-ingress@latest
 ```
 
-### 2. 配置
+## Quick Start
 
 ```bash
-# 创建配置目录
-mkdir -p /etc/auto-ingress
+# 1. Create configuration
+auto-ingress init
 
-# 复制示例配置
-cp examples/generic.env /etc/auto-ingress/gateway.env
-cp examples/dns-tencentcloud.env /etc/auto-ingress/dns.env
+# 2. Add sites
+auto-ingress site add example.com web:3000
+auto-ingress site add api.example.com api:8080
 
-# 编辑配置
-vim /etc/auto-ingress/gateway.env
-vim /etc/auto-ingress/dns.env
-
-# 设置权限
-chmod 600 /etc/auto-ingress/dns.env
+# 3. Start gateway
+auto-ingress up
 ```
 
-### 3. 启动
-
-```bash
-docker compose up -d
-```
-
-### 4. 验证
-
-```bash
-# 检查容器状态
-docker compose ps
-
-# 查看日志
-docker compose logs -f
-
-# 测试 HTTPS
-curl -I https://example.com
-```
-
-## 配置说明
-
-### 环境变量
-
-| 变量 | 必需 | 说明 | 示例 |
-|------|------|------|------|
-| `GATEWAY_IMAGE` | ✅ | 镜像地址 (digest) | `registry/auto-ingress@sha256:...` |
-| `COMPOSE_PROJECT_NAME` | ✅ | Compose 项目名 | `auto-ingress` |
-| `GATEWAY_ENV_FILE` | ✅ | DNS 凭据文件 | `/etc/auto-ingress/dns.env` |
-| `ACME_EMAIL` | ✅ | 证书邮箱 | `ops@example.com` |
-| `SITE_DOMAINS` | ✅ | 域名和服务映射 | `example.com:web:3000` |
-| `UPSTREAM_NETWORK` | ✅ | 上游网络 | `app-network` |
-| `DNS_PROVIDER` | ❌ | DNS 提供商 | `tencentcloud` |
-| `HEALTH_DOMAIN` | ❌ | 健康检查域名 | `example.com` |
-| `HTTP_BIND` | ❌ | HTTP 绑定 | `0.0.0.0:80` |
-| `HTTPS_BIND` | ❌ | HTTPS 绑定 | `0.0.0.0:443` |
-| `ADMIN_BIND` | ❌ | Admin API 绑定 | `127.0.0.1:2019` |
-
-### SITE_DOMAINS 格式
+## Commands
 
 ```
-domain1:service1:port1,domain2:service2:port2
+auto-ingress init                    Interactive configuration wizard
+auto-ingress site add <domain> <upstream>
+auto-ingress site remove <domain>
+auto-ingress site list               List all configured sites
+auto-ingress config show             Display configuration
+auto-ingress config validate         Validate configuration
+auto-ingress up                      Start the gateway
+auto-ingress up --dry-run            Preview generated Caddyfile
+auto-ingress down                    Stop the gateway
+auto-ingress restart                 Restart the gateway
+auto-ingress status                  Show gateway status
+auto-ingress cert list               List certificates and expiry
+auto-ingress cert status <domain>    Certificate details
+auto-ingress logs -f                 Follow gateway logs
+auto-ingress doctor                  Run diagnostic checks
+auto-ingress version                 Version info
 ```
 
-**示例:**
-```bash
-# 单个域名
-SITE_DOMAINS=example.com:web-app:3000
+All commands support `--json` for JSON output and `--config` to specify a config file path.
 
-# 多个域名
-SITE_DOMAINS=example.com:web:3000,api.example.com:api:8080,admin.example.com:admin:3001
+## Configuration
 
-# 多个域名指向同一服务
-SITE_DOMAINS=example.com:web:3000,www.example.com:web:3000
+Configuration lives in `auto-ingress.yaml`:
+
+```yaml
+version: "1"
+
+gateway:
+  email: ops@example.com
+  http_bind: "0.0.0.0:80"
+  https_bind: "0.0.0.0:443"
+  admin_bind: "127.0.0.1:2019"
+  memory_limit: 256m
+  pids_limit: 256
+
+dns:
+  provider: cloudflare
+
+sites:
+  - domain: example.com
+    upstream: web:3000
+  - domain: api.example.com
+    upstream: api:8080
+
+security:
+  hsts: true
+  x_frame_options: SAMEORIGIN
+  content_type_nosniff: true
+  referrer_policy: strict-origin-when-cross-origin
+  hide_server_header: true
+
+discovery:
+  enabled: false
+  network: app-network
+
+logging:
+  access:
+    enabled: true
+    format: json
+    output: stdout
+  level: info
 ```
 
-### DNS 提供商配置
+### DNS Providers
 
-#### 腾讯云
+Set credentials as environment variables before running `auto-ingress up`:
 
-```bash
-# dns.env
-TENCENTCLOUD_SECRET_ID=your-secret-id
-TENCENTCLOUD_SECRET_KEY=your-secret-key
+| Provider | Environment Variables |
+|----------|----------------------|
+| Tencent Cloud | `TENCENTCLOUD_SECRET_ID`, `TENCENTCLOUD_SECRET_KEY` |
+| Alibaba Cloud | `ALIYUN_ACCESS_KEY_ID`, `ALIYUN_ACCESS_KEY_SECRET` |
+| Cloudflare | `CLOUDFLARE_API_TOKEN` |
+| AWS Route53 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION` |
+| DigitalOcean | `DO_AUTH_TOKEN` |
+| Google Cloud | `GCE_SERVICE_ACCOUNT` |
+
+Or reference a DNS env file:
+
+```yaml
+dns:
+  provider: cloudflare
+  env_file: /etc/auto-ingress/dns.env
 ```
 
-#### 阿里云
+## Docker Label Auto-Discovery
 
-```bash
-# dns.env
-ALIYUN_ACCESS_KEY_ID=your-access-key-id
-ALIYUN_ACCESS_KEY_SECRET=your-access-key-secret
+When `discovery.enabled: true`, the gateway automatically discovers services from Docker container labels:
+
+```yaml
+# docker-compose.yml of your app
+services:
+  web:
+    image: my-app:latest
+    labels:
+      auto-ingress.enable: "true"
+      auto-ingress.domain: "example.com"
+      auto-ingress.port: "3000"
 ```
 
-#### Cloudflare
+## How It Works
 
-```bash
-# dns.env
-CLOUDFLARE_API_TOKEN=your-api-token
+```
+auto-ingress up
+    │
+    ├─ 1. Load and validate auto-ingress.yaml
+    ├─ 2. Generate Caddyfile (Go template)
+    ├─ 3. Launch Caddy container with:
+    │     - Generated Caddyfile mounted
+    │     - DNS credentials passed as env vars
+    │     - Security hardening (non-root, read-only FS, minimal caps)
+    └─ 4. Caddy auto-provisions HTTPS certificates via ACME DNS-01
 ```
 
-#### AWS Route53
-
-```bash
-# dns.env
-AWS_ACCESS_KEY_ID=your-access-key-id
-AWS_SECRET_ACCESS_KEY=your-secret-access-key
-AWS_REGION=us-east-1
-```
-
-## 构建
-
-### 默认构建 (腾讯云)
-
-```bash
-docker build -t auto-ingress .
-```
-
-### 指定 DNS 插件
-
-```bash
-# 单个插件
-docker build --build-arg DNS_PLUGINS=cloudflare -t auto-ingress .
-
-# 多个插件
-docker build --build-arg DNS_PLUGINS="tencentcloud cloudflare" -t auto-ingress .
-```
-
-### 使用 Makefile
-
-```bash
-make build                              # 默认构建
-make build DNS_PLUGINS=cloudflare       # 指定插件
-make build-all                          # 构建所有插件版本
-make test                               # 运行测试
-```
-
-## 目录结构
+## Project Structure
 
 ```
 auto-ingress/
-├── Dockerfile              # 多阶段构建，支持多 DNS 插件
-├── entrypoint.sh           # 入口脚本，配置验证和生成
-├── compose.yml             # Docker Compose 配置
-├── Makefile                # 构建和测试
-├── README.md               # 文档
-├── LICENSE                 # MIT 许可证
-├── bin/
-│   ├── generate-config     # 配置生成器
-│   ├── test-config         # 配置测试
-│   ├── test-dockerfile     # Dockerfile 测试
-│   └── quick-start         # 快速开始
-├── examples/
-│   ├── generic.env         # 通用配置
-│   ├── multi-site.env      # 多站点配置
-│   └── dns-*.env           # DNS 提供商配置
-└── product.json            # 版本信息
+├── main.go                          Entry point
+├── cmd/                             CLI commands (cobra)
+│   ├── root.go, init.go, site.go
+│   ├── up.go, down.go, status.go
+│   ├── cert.go, config.go, logs.go
+│   ├── doctor.go, version.go
+├── internal/
+│   ├── config/                      Config loading and validation
+│   │   ├── schema.go                Types and defaults
+│   │   ├── loader.go                YAML loading + env overrides
+│   │   └── validator.go             Validation rules
+│   ├── caddy/                       Caddyfile generation
+│   │   ├── generator.go             Go template renderer
+│   │   └── templates/               Caddyfile.gotmpl
+│   ├── docker/                      Docker container management
+│   │   └── manager.go               Container lifecycle via CLI
+│   └── acme/                        Certificate store
+│       └── store.go                 Read certs from Caddy data
+├── pkg/output/                      Terminal formatting
+├── examples/                        Config examples
+├── docs/                            Documentation
+├── Makefile                         Build commands
+├── .goreleaser.yml                  Release automation
+├── Dockerfile.release               Docker image for releases
+├── product.json                     Project metadata
+└── compose.yml                      Docker Compose (container mode)
 ```
 
-## 高级用法
-
-### 自定义 Caddyfile
-
-如果需要更复杂的配置，可以挂载自定义 Caddyfile：
+## Build
 
 ```bash
-# 生成自定义 Caddyfile
-./bin/generate-config /etc/auto-ingress/gateway.env Caddyfile
-
-# 挂载到容器
-docker compose -f compose.yml -f compose.custom.yml up -d
+make build              # Build binary
+make test               # Run tests
+make lint               # Run linter
+make install            # Install to $GOPATH/bin
 ```
 
-### 热重载配置
+## License
 
-```bash
-# 重新生成配置
-./bin/generate-config /etc/auto-ingress/gateway.env Caddyfile
-
-# 重载 Caddy (无需重启)
-docker compose exec gateway caddy reload --config /etc/caddy/Caddyfile
-```
-
-### 多实例部署
-
-```bash
-# 实例 1: 主站
-COMPOSE_PROJECT_NAME=main-site \
-  SITE_DOMAINS=example.com:web:3000 \
-  docker compose up -d
-
-# 实例 2: API
-COMPOSE_PROJECT_NAME=api-gateway \
-  SITE_DOMAINS=api.example.com:api:8080 \
-  docker compose up -d
-```
-
-## 故障排除
-
-### 证书申请失败
-
-```bash
-# 检查 DNS 配置
-docker compose exec gateway env | grep -E "TENCENTCLOUD|ALIYUN|CLOUDFLARE|AWS"
-
-# 检查 ACME 日志
-docker compose logs gateway | grep -i acme
-
-# 验证 DNS 记录
-dig TXT _acme-challenge.example.com
-```
-
-### 健康检查失败
-
-```bash
-# 检查后端服务
-docker compose exec gateway curl -v http://service:port/health
-
-# 检查网络连接
-docker network inspect app-network
-```
-
-### 配置验证失败
-
-```bash
-# 测试配置
-./bin/test-config /etc/auto-ingress/gateway.env
-
-# 查看生成的 Caddyfile
-./bin/generate-config /etc/auto-ingress/gateway.env Caddyfile.test
-cat Caddyfile.test
-```
-
-## 支持的 DNS 提供商
-
-| 提供商 | 构建参数 | 环境变量 |
-|--------|----------|----------|
-| 腾讯云 | `tencentcloud` | `TENCENTCLOUD_SECRET_ID/KEY` |
-| 阿里云 | `aliyun` | `ALIYUN_ACCESS_KEY_ID/SECRET` |
-| Cloudflare | `cloudflare` | `CLOUDFLARE_API_TOKEN` |
-| AWS Route53 | `route53` | `AWS_ACCESS_KEY_ID/SECRET` |
-| DigitalOcean | `digitalocean` | `DO_AUTH_TOKEN` |
-| Google Cloud | `googlecloud` | `GCE_SERVICE_ACCOUNT` |
-
-## 贡献
-
-欢迎提交 Issue 和 Pull Request！
-
-## 许可证
-
-MIT License - 详见 [LICENSE](LICENSE)
+MIT License — see [LICENSE](LICENSE)

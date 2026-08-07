@@ -1,11 +1,13 @@
 {
   "schema_version": "1.0",
   "name": "auto-ingress",
-  "version": "1.0.0",
-  "description": "Generic Domain + Service + Auto HTTPS Gateway",
-  "homepage": "https://github.com/nodecoda/dc-platform/tree/main/delivery/auto-ingress",
+  "version": "2.0.0",
+  "description": "Automatic HTTPS reverse proxy gateway CLI",
+  "homepage": "https://github.com/nodecoda/auto-ingress",
   "license": "MIT",
   "features": [
+    "cli-tool",
+    "yaml-configuration",
     "domain-configuration",
     "service-mapping",
     "auto-certificate",
@@ -16,49 +18,26 @@
     "hot-reload",
     "multi-site",
     "non-root-user",
-    "read-only-filesystem"
+    "read-only-filesystem",
+    "config-validation",
+    "dry-run-preview",
+    "diagnostics"
   ],
   "dns_providers": [
-    {
-      "name": "tencentcloud",
-      "display_name": "Tencent Cloud DNS",
-      "module": "github.com/caddy-dns/tencentcloud"
-    },
-    {
-      "name": "aliyun",
-      "display_name": "Alibaba Cloud DNS",
-      "module": "github.com/caddy-dns/alidns"
-    },
-    {
-      "name": "cloudflare",
-      "display_name": "Cloudflare DNS",
-      "module": "github.com/caddy-dns/cloudflare"
-    },
-    {
-      "name": "route53",
-      "display_name": "AWS Route53",
-      "module": "github.com/caddy-dns/route53"
-    },
-    {
-      "name": "digitalocean",
-      "display_name": "DigitalOcean DNS",
-      "module": "github.com/caddy-dns/digitalocean"
-    },
-    {
-      "name": "googlecloud",
-      "display_name": "Google Cloud DNS",
-      "module": "github.com/caddy-dns/googlecloud"
-    }
+    {"name": "tencentcloud", "module": "github.com/caddy-dns/tencentcloud"},
+    {"name": "aliyun", "module": "github.com/caddy-dns/alidns"},
+    {"name": "cloudflare", "module": "github.com/caddy-dns/cloudflare"},
+    {"name": "route53", "module": "github.com/caddy-dns/route53"},
+    {"name": "digitalocean", "module": "github.com/caddy-dns/digitalocean"},
+    {"name": "googlecloud", "module": "github.com/caddy-dns/googlecloud"}
   ],
   "runtime": {
     "caddy_version": "2.10.2",
     "base_image": "caddy:2.10.2-alpine",
-    "user": "caddy",
-    "ports": [80, 443, 443/udp, 2019],
-    "volumes": ["/data", "/config"]
+    "ports": [80, 443, 443, 2019]
   },
   "requirements": {
     "docker": ">=20.10",
-    "docker_compose": ">=2.0"
+    "go": ">=1.22"
   }
 }

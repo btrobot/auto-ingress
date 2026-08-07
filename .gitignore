@@ -1,15 +1,16 @@
-# Build artifacts
-*.tar
-*.tar.gz
-*.tgz
+# Binary
+/auto-ingress
+/auto-ingress-*
 
-# Docker
-.docker/
-docker-compose.override.yml
+# Go
+*.exe
+*.test
+*.out
+coverage.out
 
 # IDE
-.vscode/
 .idea/
+.vscode/
 *.swp
 *.swo
 
@@ -17,14 +18,13 @@ docker-compose.override.yml
 .DS_Store
 Thumbs.db
 
-# Test artifacts
-Caddyfile.test
-Caddyfile.example
+# Build artifacts
+dist/
+.docker/
 
-# Logs
-*.log
-
-# Temporary files
-*.tmp
-*.bak
-.artifacts/
+# Temp
+/tmp/
+Caddyfile
+Caddyfile.*
+*.crt
+*.key
