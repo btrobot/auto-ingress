@@ -1,95 +1,46 @@
-# Auto Ingress - Docker Compose Configuration
-# 支持环境变量配置 或 Docker标签自动发现
-
+# Auto Ingress v2 - Orchestrator compose
+# The gateway container manages a separate Caddy container via Docker API.
 name: ${COMPOSE_PROJECT_NAME:?COMPOSE_PROJECT_NAME is required}
 
 services:
   gateway:
-    image: ${GATEWAY_IMAGE:?GATEWAY_IMAGE must be repository@sha256 digest}
+    image: ${GATEWAY_IMAGE:?GATEWAY_IMAGE is required}
     container_name: ${COMPOSE_PROJECT_NAME}-gateway
     restart: unless-stopped
-    
-    # 环境配置
-    env_file:
-      - ${GATEWAY_ENV_FILE:?GATEWAY_ENV_FILE is required}
+
+    group_add:
+      - "${DOCKER_GID:-988}"
+
     environment:
-      # 必需
-      ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL is required}
-      SITE_DOMAINS: ${SITE_DOMAINS:-}
-      
-      # 可选
-      DNS_PROVIDER: ${DNS_PROVIDER:-tencentcloud}
-      HEALTH_DOMAIN: ${HEALTH_DOMAIN:-}
-      
-      # 自动发现模式
-      AUTO_DISCOVER: ${AUTO_DISCOVER:-false}
-    
-    # 端口绑定
-    ports:
-      - "${HTTP_BIND:-0.0.0.0:80}:80/tcp"
-      - "${HTTPS_BIND:-0.0.0.0:443}:443/tcp"
-      - "${HTTPS_BIND:-0.0.0.0:443}:443/udp"
-      - "${ADMIN_BIND:-127.0.0.1:2019}:2019/tcp"
-    
-    # 卷
+      - SELF_IMAGE=${GATEWAY_IMAGE}
+
     volumes:
-      - caddy_data:/data
-      - caddy_config:/config
-      - caddy_etc:/etc/caddy
-      # Docker socket (只读)
+      - ./auto-ingress.yaml:/srv/auto-ingress.yaml:ro
+      - ./:/srv/auto-ingress
       - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock:ro
-    
-    # 临时文件系统
+
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=16m,uid=1000,gid=1000,mode=0700
-    
-    # 网络
-    networks:
-      - upstream
-    
-    # 健康检查
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - >-
-          curl -f http://localhost:2019/config/ || exit 1
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-    
-    # 安全
+
     cap_drop:
       - ALL
-    cap_add:
-      - NET_BIND_SERVICE
     security_opt:
       - no-new-privileges:true
     read_only: true
-    
-    # 资源限制
+
     mem_limit: ${MEM_LIMIT:-256m}
     pids_limit: ${PIDS_LIMIT:-256}
     stop_grace_period: 30s
-    
-    # 日志
+
+    healthcheck:
+      test: ["CMD-SHELL", "docker inspect --format='{{.State.Running}}' auto-ingress-caddy 2>/dev/null | grep -q true"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "5"
-
-# 外部网络
-networks:
-  upstream:
-    external: true
-    name: ${UPSTREAM_NETWORK:?UPSTREAM_NETWORK is required}
-
-# 持久卷
-volumes:
-  caddy_data:
-    driver: local
-  caddy_config:
-    driver: local
-  caddy_etc:
-    driver: local

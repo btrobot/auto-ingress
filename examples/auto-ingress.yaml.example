@@ -1,0 +1,39 @@
+# Auto Ingress Configuration
+# Copy to /srv/auto-ingress/auto-ingress.yaml and customize
+
+version: "1"
+
+gateway:
+  email: admin@example.com
+  http_bind: "0.0.0.0:80"
+  https_bind: "0.0.0.0:443"
+  admin_bind: "127.0.0.1:2019"
+  memory_limit: "256m"
+  pids_limit: 256
+
+dns:
+  provider: tencentcloud
+  env_file: /srv/auto-ingress/edge-dns.env
+
+sites: []
+# sites:
+#   - domain: example.com
+#     upstream: web:3000
+
+discovery:
+  enabled: true
+  network: upstream
+
+security:
+  hsts: true
+  x_frame_options: SAMEORIGIN
+  content_type_nosniff: true
+  referrer_policy: strict-origin-when-cross-origin
+  hide_server_header: true
+
+logging:
+  access:
+    enabled: true
+    format: json
+    output: stdout
+  level: info

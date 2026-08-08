@@ -29,3 +29,6 @@ Caddyfile.example
 Caddyfile.test
 *.crt
 *.key
+
+# Build evidence
+.artifacts/

@@ -6,8 +6,9 @@ base_images:
   - caddy_builder
   - caddy
   - alpine
+  - golang
 
 images:
   - name: auto-ingress
     dockerfile: Dockerfile
-    base_image_args: [CADDY_BUILDER_IMAGE, CADDY_IMAGE, ALPINE_IMAGE]
+    base_image_args: [CADDY_BUILDER_IMAGE, CADDY_IMAGE, ALPINE_IMAGE, GOLANG_IMAGE]

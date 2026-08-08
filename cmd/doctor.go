@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"os/exec"
 	"time"
 
 	"github.com/nodecoda/auto-ingress/internal/config"
@@ -51,31 +50,24 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// 2. Docker checks
-	if _, err := exec.LookPath("docker"); err != nil {
-		results = append(results, checkResult{"Docker CLI", "fail", "docker not found in PATH"})
+	// 2. Docker daemon check via SDK
+	mgr, dockerErr := docker.NewManager()
+	if dockerErr != nil {
+		results = append(results, checkResult{"Docker daemon", "fail", dockerErr.Error()})
 	} else {
-		results = append(results, checkResult{"Docker CLI", "pass", "found"})
-		if err := exec.Command("docker", "info").Run(); err != nil {
-			results = append(results, checkResult{"Docker daemon", "fail", "cannot connect to Docker daemon"})
-		} else {
-			results = append(results, checkResult{"Docker daemon", "pass", "running"})
-		}
-	}
-
-	// 3. Network checks
-	if cfg != nil && cfg.Discovery.Network != "" {
-		if err := exec.Command("docker", "network", "inspect", cfg.Discovery.Network).Run(); err != nil {
-			results = append(results, checkResult{"Network " + cfg.Discovery.Network, "warn", "not found (will be created)"})
-		} else {
-			results = append(results, checkResult{"Network " + cfg.Discovery.Network, "pass", "exists"})
-		}
-	}
-
-	// 4. Gateway container check
-	mgr, err := docker.NewManager()
-	if err == nil {
 		defer mgr.Close()
+		results = append(results, checkResult{"Docker daemon", "pass", "reachable via SDK"})
+
+		// 3. Network check
+		if cfg != nil && cfg.Discovery.Network != "" {
+			if mgr.HasNetwork(ctx, cfg.Discovery.Network) {
+				results = append(results, checkResult{"Network " + cfg.Discovery.Network, "pass", "exists"})
+			} else {
+				results = append(results, checkResult{"Network " + cfg.Discovery.Network, "warn", "not found (will be created)"})
+			}
+		}
+
+		// 4. Gateway container check
 		status, err := mgr.Status(ctx)
 		if err != nil || status == nil || !status.Running {
 			results = append(results, checkResult{"Gateway container", "fail", "not running"})

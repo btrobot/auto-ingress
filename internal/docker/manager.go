@@ -2,20 +2,24 @@ package docker
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/client"
+	"github.com/docker/go-connections/nat"
+	units "github.com/docker/go-units"
 	"github.com/nodecoda/auto-ingress/internal/config"
 )
 
 const (
-	managedLabel = "auto-ingress.managed"
-	containerName = "auto-ingress-gateway"
+	managedLabel  = "auto-ingress.managed"
+	containerName = "auto-ingress-caddy"
 )
 
 // GatewayStatus represents the current gateway state
@@ -34,23 +38,30 @@ type PortMapping struct {
 	Protocol  string `json:"protocol"`
 }
 
-// Manager manages the auto-ingress Docker container
-type Manager struct{}
-
-// NewManager creates a new Docker manager
-func NewManager() (*Manager, error) {
-	if _, err := exec.LookPath("docker"); err != nil {
-		return nil, fmt.Errorf("docker not found in PATH")
-	}
-	// Check Docker daemon is running
-	if err := exec.Command("docker", "info").Run(); err != nil {
-		return nil, fmt.Errorf("docker daemon is not running")
-	}
-	return &Manager{}, nil
+// Manager manages the auto-ingress Docker container via the Docker SDK
+type Manager struct {
+	cli *client.Client
 }
 
-// Close is a no-op for the CLI-based manager
-func (m *Manager) Close() error { return nil }
+// NewManager creates a new Docker manager using the Docker Go SDK.
+// It pings the daemon to verify connectivity.
+func NewManager() (*Manager, error) {
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		return nil, fmt.Errorf("create docker client: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := cli.Ping(ctx); err != nil {
+		return nil, fmt.Errorf("docker daemon is not running: %w", err)
+	}
+	return &Manager{cli: cli}, nil
+}
+
+// Close releases the Docker client resources
+func (m *Manager) Close() error {
+	return m.cli.Close()
+}
 
 // Up creates or recreates the gateway container
 func (m *Manager) Up(ctx context.Context, cfg *config.Config, caddyfile []byte) error {
@@ -59,23 +70,30 @@ func (m *Manager) Up(ctx context.Context, cfg *config.Config, caddyfile []byte) 
 
 	// Ensure network
 	if cfg.Discovery.Network != "" {
-		m.EnsureNetwork(ctx, cfg.Discovery.Network)
+		if err := m.EnsureNetwork(ctx, cfg.Discovery.Network); err != nil {
+			return err
+		}
 	}
 
-	// Write Caddyfile
-	caddyDir := "/tmp/auto-ingress"
-	os.MkdirAll(caddyDir, 0755)
+	// Write Caddyfile to host
+	caddyDir := "/srv/auto-ingress"
+	if err := os.MkdirAll(caddyDir, 0755); err != nil {
+		return fmt.Errorf("create caddy dir: %w", err)
+	}
 	caddyfilePath := caddyDir + "/Caddyfile"
 	if err := os.WriteFile(caddyfilePath, caddyfile, 0644); err != nil {
 		return fmt.Errorf("write caddyfile: %w", err)
 	}
 
-	// Build docker run args
-	image := cfg.Gateway.DockerImage
-	if image == "" {
-		image = "caddy:2.10.2-alpine"
+	imageName := cfg.Gateway.DockerImage
+	if imageName == "" {
+		imageName = os.Getenv("SELF_IMAGE")
+	}
+	if imageName == "" {
+		imageName = "caddy:2.10.2-alpine"
 	}
 
+	// ── Build port bindings ──────────────────────────────────────
 	httpBind := cfg.Gateway.HTTPBind
 	if httpBind == "" {
 		httpBind = "0.0.0.0:80"
@@ -89,69 +107,98 @@ func (m *Manager) Up(ctx context.Context, cfg *config.Config, caddyfile []byte) 
 		adminBind = "127.0.0.1:2019"
 	}
 
-	args := []string{
-		"run", "-d",
-		"--name", containerName,
-		"--label", managedLabel + "=true",
-		"--restart", "unless-stopped",
-		"--cap-add", "NET_BIND_SERVICE",
-		"--security-opt", "no-new-privileges:true",
-		"--read-only",
-		"--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=16m",
-		"-p", httpBind + ":80",
-		"-p", httpsBind + ":443",
-		"-p", httpsBind + ":443/udp",
-		"-p", adminBind + ":2019",
-		"-v", caddyfilePath + ":/etc/caddy/Caddyfile:ro",
-		"-v", "auto-ingress-data:/data",
-		"-v", "auto-ingress-config:/config",
+	httpHost, httpPort := splitBind(httpBind)
+	httpsHost, httpsPort := splitBind(httpsBind)
+	adminHost, adminPort := splitBind(adminBind)
+
+	portSet := nat.PortSet{
+		"80/tcp":   {},
+		"443/tcp":  {},
+		"443/udp":  {},
+		"2019/tcp": {},
+	}
+	portMap := nat.PortMap{
+		"80/tcp":   {{HostIP: httpHost, HostPort: httpPort}},
+		"443/tcp":  {{HostIP: httpsHost, HostPort: httpsPort}},
+		"443/udp":  {{HostIP: httpsHost, HostPort: httpsPort}},
+		"2019/tcp": {{HostIP: adminHost, HostPort: adminPort}},
 	}
 
-	// Memory limit
-	memLimit := cfg.Gateway.MemoryLimit
-	if memLimit == "" {
-		memLimit = "256m"
-	}
-	args = append(args, "--memory", memLimit)
-
-	// PID limit
-	if cfg.Gateway.PidsLimit > 0 {
-		args = append(args, "--pids-limit", fmt.Sprintf("%d", cfg.Gateway.PidsLimit))
-	}
-
-	// Network
-	if cfg.Discovery.Network != "" {
-		args = append(args, "--network", cfg.Discovery.Network)
-	}
-
-	// DNS env vars
-	args = append(args, "-e", "ACME_EMAIL="+cfg.Gateway.Email)
+	// ── Build environment variables ──────────────────────────────
+	env := []string{"ACME_EMAIL=" + cfg.Gateway.Email}
 	if cfg.DNS.EnvFile != "" {
 		data, err := os.ReadFile(cfg.DNS.EnvFile)
 		if err == nil {
 			for _, line := range strings.Split(string(data), "\n") {
 				line = strings.TrimSpace(line)
 				if line != "" && !strings.HasPrefix(line, "#") {
-					args = append(args, "-e", line)
+					env = append(env, line)
 				}
 			}
 		}
 	}
 
-	args = append(args, image)
-	args = append(args, "caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile")
+	// ── Container config ─────────────────────────────────────────
+	containerCfg := &container.Config{
+		Image:        imageName,
+		Labels:       map[string]string{managedLabel: "true"},
+		ExposedPorts: portSet,
+		Env:          env,
+		Entrypoint:   []string{"caddy"},
+		Cmd:          []string{"run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"},
+	}
 
-	// Pull image first
-	pull := exec.CommandContext(ctx, "docker", "pull", image)
-	pull.Stdout = os.Stdout
-	pull.Stderr = os.Stderr
-	pull.Run() // best effort
+	// ── Host config ──────────────────────────────────────────────
+	memLimit := cfg.Gateway.MemoryLimit
+	if memLimit == "" {
+		memLimit = "256m"
+	}
+	memBytes, _ := units.FromHumanSize(memLimit)
 
-	// Run container
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	output, err := cmd.CombinedOutput()
+	var pidsLimit *int64
+	if cfg.Gateway.PidsLimit > 0 {
+		v := int64(cfg.Gateway.PidsLimit)
+		pidsLimit = &v
+	}
+
+	hostCfg := &container.HostConfig{
+		PortBindings: portMap,
+		Binds: []string{
+			caddyfilePath + ":/etc/caddy/Caddyfile:ro",
+			"auto-ingress-data:/data",
+			"auto-ingress-config:/config",
+		},
+		RestartPolicy: container.RestartPolicy{
+			Name: "unless-stopped",
+		},
+		CapAdd:         []string{"NET_BIND_SERVICE"},
+		SecurityOpt:    []string{"no-new-privileges:true"},
+		ReadonlyRootfs: true,
+		Tmpfs: map[string]string{
+			"/tmp": "rw,noexec,nosuid,nodev,size=16m",
+		},
+		Resources: container.Resources{
+			Memory:    memBytes,
+			PidsLimit: pidsLimit,
+		},
+	}
+
+	// ── Network config ───────────────────────────────────────────
+	networkCfg := &network.NetworkingConfig{}
+	if cfg.Discovery.Network != "" {
+		networkCfg.EndpointsConfig = map[string]*network.EndpointSettings{
+			cfg.Discovery.Network: {},
+		}
+	}
+
+	// ── Create and start container ───────────────────────────────
+	createResp, err := m.cli.ContainerCreate(ctx, containerCfg, hostCfg, networkCfg, nil, containerName)
 	if err != nil {
-		return fmt.Errorf("docker run: %w\n%s", err, string(output))
+		return fmt.Errorf("create container: %w", err)
+	}
+
+	if err := m.cli.ContainerStart(ctx, createResp.ID, container.StartOptions{}); err != nil {
+		return fmt.Errorf("start container: %w", err)
 	}
 
 	return nil
@@ -159,56 +206,44 @@ func (m *Manager) Up(ctx context.Context, cfg *config.Config, caddyfile []byte) 
 
 // Down stops and removes the gateway container
 func (m *Manager) Down(ctx context.Context) error {
-	exec.CommandContext(ctx, "docker", "stop", containerName).Run()
-	exec.CommandContext(ctx, "docker", "rm", containerName).Run()
+	timeout := 10
+	_ = m.cli.ContainerStop(ctx, containerName, container.StopOptions{Timeout: &timeout})
+	_ = m.cli.ContainerRemove(ctx, containerName, container.RemoveOptions{Force: true})
 	return nil
 }
 
 // Status returns current gateway status
 func (m *Manager) Status(ctx context.Context) (*GatewayStatus, error) {
-	out, err := exec.CommandContext(ctx, "docker", "inspect",
-		"--format", `{"id":"{{.Id}}","image":"{{.Config.Image}}","running":{{.State.Running}},"started":"{{.State.StartedAt}}"}`,
-		containerName).Output()
+	inspect, err := m.cli.ContainerInspect(ctx, containerName)
 	if err != nil {
-		return nil, nil // container doesn't exist
-	}
-
-	var raw struct {
-		ID      string `json:"id"`
-		Image   string `json:"image"`
-		Running bool   `json:"running"`
-		Started string `json:"started"`
-	}
-	if err := json.Unmarshal(out, &raw); err != nil {
-		return nil, fmt.Errorf("parse inspect: %w", err)
+		if client.IsErrNotFound(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("inspect container: %w", err)
 	}
 
 	status := &GatewayStatus{
-		Running:     raw.Running,
-		ContainerID: raw.ID,
-		Image:       raw.Image,
+		Running:     inspect.State != nil && inspect.State.Running,
+		ContainerID: inspect.ID,
+		Image:       inspect.Config.Image,
 	}
 
-	if raw.Started != "" && raw.Running {
-		started, err := time.Parse(time.RFC3339Nano, raw.Started)
+	if status.Running && inspect.State.StartedAt != "" {
+		started, err := time.Parse(time.RFC3339Nano, inspect.State.StartedAt)
 		if err == nil {
 			status.Uptime = time.Since(started).Truncate(time.Second).String()
 		}
 	}
 
-	// Get port mappings
-	portOut, _ := exec.CommandContext(ctx, "docker", "port", containerName).Output()
-	for _, line := range strings.Split(strings.TrimSpace(string(portOut)), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		parts := strings.SplitN(line, " -> ", 2)
-		if len(parts) == 2 {
-			status.Ports = append(status.Ports, PortMapping{
-				Host:      strings.TrimSpace(parts[1]),
-				Container: strings.TrimSpace(parts[0]),
-			})
+	if inspect.NetworkSettings != nil {
+		for containerPort, bindings := range inspect.NetworkSettings.Ports {
+			for _, b := range bindings {
+				status.Ports = append(status.Ports, PortMapping{
+					Host:      b.HostIP + ":" + b.HostPort,
+					Container: string(containerPort),
+					Protocol:  containerPort.Proto(),
+				})
+			}
 		}
 	}
 
@@ -217,47 +252,60 @@ func (m *Manager) Status(ctx context.Context) (*GatewayStatus, error) {
 
 // Logs returns a reader for container logs
 func (m *Manager) Logs(ctx context.Context, follow bool, since string) (io.ReadCloser, error) {
-	args := []string{"logs", "--timestamps"}
-	if follow {
-		args = append(args, "-f")
+	opts := container.LogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Timestamps: true,
+		Follow:     follow,
 	}
 	if since != "" {
-		args = append(args, "--since", since)
+		opts.Since = since
 	}
-	args = append(args, containerName)
-
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	cmd.Stderr = cmd.Stdout // merge stderr into stdout
-	stdout, err := cmd.StdoutPipe()
+	reader, err := m.cli.ContainerLogs(ctx, containerName, opts)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("container logs: %w", err)
 	}
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
-	return stdout, nil
+	return reader, nil
 }
 
 // Restart restarts the gateway container
 func (m *Manager) Restart(ctx context.Context) error {
-	out, err := exec.CommandContext(ctx, "docker", "restart", containerName).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("restart: %w\n%s", err, string(out))
+	timeout := 10
+	if err := m.cli.ContainerRestart(ctx, containerName, container.StopOptions{Timeout: &timeout}); err != nil {
+		return fmt.Errorf("restart: %w", err)
 	}
 	return nil
 }
 
 // EnsureNetwork creates the Docker network if it doesn't exist
 func (m *Manager) EnsureNetwork(ctx context.Context, name string) error {
-	// Check if exists
-	check := exec.CommandContext(ctx, "docker", "network", "inspect", name)
-	if check.Run() == nil {
+	if m.HasNetwork(ctx, name) {
 		return nil
 	}
-	// Create
-	out, err := exec.CommandContext(ctx, "docker", "network", "create", name).CombinedOutput()
+	_, err := m.cli.NetworkCreate(ctx, name, network.CreateOptions{})
 	if err != nil {
-		return fmt.Errorf("create network %s: %w\n%s", name, err, string(out))
+		return fmt.Errorf("create network %s: %w", name, err)
 	}
 	return nil
+}
+
+// HasNetwork checks whether a Docker network with the given name exists
+func (m *Manager) HasNetwork(ctx context.Context, name string) bool {
+	_, err := m.cli.NetworkInspect(ctx, name, network.InspectOptions{})
+	return err == nil
+}
+
+// ── helpers ──────────────────────────────────────────────────────
+
+// splitBind splits a "host:port" address into host and port.
+// Uses net.SplitHostPort for correct IPv6 handling.
+func splitBind(addr string) (string, string) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "0.0.0.0", addr
+	}
+	if host == "" {
+		host = "0.0.0.0"
+	}
+	return host, port
 }

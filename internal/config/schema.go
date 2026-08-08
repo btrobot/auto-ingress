@@ -83,7 +83,7 @@ func DefaultConfig() *Config {
             AdminBind:   "127.0.0.1:2019",
             MemoryLimit: "256m",
             PidsLimit:   256,
-            DockerImage: "caddy:2.10.2-alpine",
+            DockerImage: "",
         },
         DNS: DNSConfig{
             Provider: "tencentcloud",
